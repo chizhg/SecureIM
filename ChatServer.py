@@ -7,7 +7,7 @@ import Message
 import Utils
 import time
 
-from Message import MessageType, SEPARATOR, SEPARATOR1, MAX_MSG_SIZE
+from Message import MessageType, AuthStartRes, SEPARATOR, SEPARATOR1, MAX_MSG_SIZE
 
 USERS_INFO_FILE = 'users.csv'
 DELIMITER = ','
@@ -99,9 +99,10 @@ class ChatServer:
                     print 'receive authentication start message from ', client_address
                     ver_result, response_msg = self._handle_client_auth_start(client_address, data)
                     if not ver_result:
+                        connection.sendall(Message.dumps(MessageType.RES_FOR_INVALID_REQ, response_msg))
                         self._client_error(connection, client_address)
                         break
-                    connection.sendall(response_msg)
+                    connection.sendall(Message.dumps(MessageType.RES_FOR_VALID_REQ, response_msg))
                 # handle authentication end message
                 elif tpe == MessageType.AUTH_END and client_address in self.login_users \
                         and self.login_users[client_address].state == UserState.VERIFIED:
@@ -158,15 +159,16 @@ class ChatServer:
         auth_start_msg_obj = Utils.deserialize_obj(auth_start_msg)
         # if the challenge solution is wrong, return false directly
         if challenge != self.login_users[client_address].challenge:
-            return False, None
+            return False, 'Answer to the given challenge is wrong!'
         user_name = auth_start_msg_obj.user_name
         # the same user cannot login twice
-        if self._find_user_info_by_name(user_name) is not None:
-            return False, None
+        user_info = self._find_user_info_by_name(user_name)
+        if user_info is not None and user_info.state == UserState.AUTHENTICATED:
+            return False, 'The user has already logged in, please retry with another user!'
         # if the provided password is wrong
         password = auth_start_msg_obj.password
         if not self._verify_password(user_name, password):
-            return False, None
+            return False, 'The user name or password is wrong, please retry!'
         # set user information
         user_info_obj = self.login_users[client_address]
         user_info_obj.user_name = auth_start_msg_obj.user_name
@@ -183,7 +185,8 @@ class ChatServer:
         c2_nonce = Utils.generate_nonce(32)
         user_info_obj.temp_nonce = c2_nonce
         serialized_dh_pub_key = Crypto.serialize_pub_key(dh_pub_key)
-        response_msg = serialized_dh_pub_key + SEPARATOR + str(c1_nonce) + SEPARATOR + str(c2_nonce)
+        response_obj = AuthStartRes(serialized_dh_pub_key, c1_nonce, c2_nonce)
+        response_msg = Utils.serialize_obj(response_obj)
         encrypted_response_msg = Crypto.asymmetric_encrypt(user_info_obj.rsa_pub_key, response_msg)
         return True, encrypted_response_msg
 

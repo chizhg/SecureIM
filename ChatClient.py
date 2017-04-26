@@ -66,8 +66,6 @@ class ChatClient(cmd.Cmd):
                 self.user_name = user_name
                 chat_client.prompt = self.user_name + CMD_PROMPT
                 chat_client.cmdloop('user <' + user_name + '> successfully login')
-            else:
-                print 'Failed to login, please retry'
         if not logined:
             print 'Your retry times has exceeded the maximum allowed times, exit the program!'
             self.recv_sock.close()
@@ -93,10 +91,10 @@ class ChatClient(cmd.Cmd):
                 self._auth_end(c2_nonce)
                 login_result = True
         except socket.error:
-            print 'Socket error happens in the authentication process, exit the program!'
+            print 'Cannot connect to the server in the authentication process, exit the program!'
             os._exit(0)
         except:
-            print 'Unknown error happens when trying to login: ', sys.exc_info()[0]
+            print 'Unknown error happens when trying to login: ', sys.exc_info()[0], ', please retry!'
         finally:
             if not login_result:
                 self.client_sock.close()
@@ -135,12 +133,17 @@ class ChatClient(cmd.Cmd):
         return c1_nonce, auth_start_response
 
     def _handle_auth_start_response(self, expected_c1_nonce, auth_start_response):
-        decrypted_auth_start_response = Crypto.asymmetric_decrypt(self.rsa_pri_key, auth_start_response)
-        server_dh_key, c1_nonce, c2_nonce = decrypted_auth_start_response.split(SEPARATOR)
-        if str(expected_c1_nonce) != c1_nonce:
+        tpe, data = Message.loads(auth_start_response)
+        if tpe == MessageType.RES_FOR_INVALID_REQ:
+            print data
+            return False, None, None
+        decrypted_auth_start_response = Crypto.asymmetric_decrypt(self.rsa_pri_key, data)
+        res_obj = Utils.deserialize_obj(decrypted_auth_start_response)
+        server_dh_key, c1_nonce, c2_nonce = res_obj.dh_pub_key, res_obj.c1_nonce, res_obj.c2_nonce
+        if str(expected_c1_nonce) != str(c1_nonce):
             return False, None, None
         shared_dh_key = Crypto.generate_shared_dh_key(self.dh_pri_key, Crypto.deserialize_pub_key(server_dh_key))
-        return True, shared_dh_key, c2_nonce
+        return True, shared_dh_key, str(c2_nonce)
 
     def _auth_end(self, c2_nonce):
         iv = Utils.generate_iv()
@@ -198,7 +201,7 @@ class ChatClient(cmd.Cmd):
         except (socket.error, ValueError) as e:
             self._re_login()
         except:
-            print 'Error happens when trying to send message to another user!'
+            print 'Unknown error happens when trying to send message to another user!'
 
     # --------------------------- get user information from the server ------------------------- #
     def _get_user_info(self, user_name):
@@ -396,7 +399,8 @@ class ChatClient(cmd.Cmd):
         encrypted_server_response = self.client_sock.recv(MAX_MSG_SIZE)
         tpe, data = Message.loads(encrypted_server_response)
         if tpe == MessageType.RES_FOR_INVALID_REQ:
-            print 'Error message received from the server: ', data
+            # print 'Error message received from the server: ', data
+            print data
             return False, data
         else:
             iv, encrypted_response_without_iv = data.split(SEPARATOR)
@@ -413,11 +417,11 @@ class ChatClient(cmd.Cmd):
 
     # -------------- override default function: will be invoked if inputting invalid command -------------- #
     def default(self, line):
-        print 'Only the following 3 commands are supported: '
-        print 'list: list all online user names'
-        print 'send <user_name> <message>: send message to another online user'
-        print 'logout: logout from the server and disconnect all other users'
-
+        print '=========== Only the following 3 commands are supported: ============='
+        print '|| list: list all online user names                                 ||'
+        print '|| send <user_name> <message>: send message to another online user  ||'
+        print '|| logout: logout from the server and disconnect all other users    ||'
+        print '======================================================================'
 
 if __name__ == '__main__':
     config = Utils.load_config('client.cfg')

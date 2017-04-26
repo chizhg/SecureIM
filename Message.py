@@ -4,7 +4,7 @@ SEPARATOR = '\n'
 SEPARATOR1 = ' '
 MAX_MSG_SIZE = 4096
 
-MAX_TIMESTAMP_GAP = 100 
+MAX_TIMESTAMP_GAP = 100
 
 
 class MessageType(object):
@@ -59,6 +59,16 @@ class AuthStartMsg(object):
         self.ip = ip
         self.port = port
         self.c1_nonce = c1_nonce
+
+
+class AuthStartRes(object):
+    def __init__(self,
+                 dh_pub_key,
+                 c1_nonce,
+                 c2_nonce):
+        self.dh_pub_key = dh_pub_key
+        self.c1_nonce = c1_nonce
+        self.c2_nonce = c2_nonce
 
 
 class ConnStartMsg(object):
