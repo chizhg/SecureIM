@@ -23,7 +23,7 @@ def get_local_ip():
     # get local ip address with ifconfig command, can be applied on unix platform
     ip_info = commands.getoutput('/sbin/ifconfig').split('\n')
     for ip_line in ip_info:
-        if ip_line.find('inet') != -1 and ip_line.find('netmask') != -1 and ip_line.find('broadcast') != -1:
+        if ip_line.find('inet') != -1 and ip_line.find('netmask') != -1 and ip_line.find('ast') != -1:
             ip = ip_line.split(' ')[1].strip()
             return ip
     # if failed to get ip with ifconfig, return '127.0.0.1' by default

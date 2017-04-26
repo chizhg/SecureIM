@@ -4,7 +4,7 @@ SEPARATOR = '\n'
 SEPARATOR1 = ' '
 MAX_MSG_SIZE = 4096
 
-MAX_TIMESTAMP_GAP = 0.05
+MAX_TIMESTAMP_GAP = 100 
 
 
 class MessageType(object):

@@ -5,7 +5,6 @@ import Crypto
 import os
 import Message
 import Utils
-import traceback
 import time
 
 from Message import MessageType, SEPARATOR, SEPARATOR1, MAX_MSG_SIZE
@@ -13,6 +12,7 @@ from Message import MessageType, SEPARATOR, SEPARATOR1, MAX_MSG_SIZE
 USERS_INFO_FILE = 'users.csv'
 DELIMITER = ','
 QUOTECHAR = '|'
+# MSS = 1460
 
 
 class UserState(object):
@@ -64,7 +64,6 @@ class ChatServer:
                 connection, client_address = self.sock.accept()
                 threading.Thread(target=self._handle_client, args=(connection, client_address)).start()
         except socket.error:
-            traceback.print_exc()
             print 'Failed to start the chat server'
 
     def _listen_to_exit(self):
@@ -78,6 +77,13 @@ class ChatServer:
     def _handle_client(self, connection, client_address):
         try:
             while True:
+                # total_data = []
+                # while True:
+                #     data = connection.recv(MAX_MSG_SIZE)
+                #     total_data.append(data)
+                #     if len(data) != MSS:
+                #         break
+                # msg = ''.join(total_data)
                 msg = connection.recv(MAX_MSG_SIZE)
                 if not msg:
                     break
@@ -136,6 +142,7 @@ class ChatServer:
             print 'Error happens when handling client messages, break the connection!'
             self._client_error(connection, client_address)
         finally:
+            print 'Close the connection with ' + str(client_address)
             connection.close()
 
     # --------------------------- login related messages ------------------------- #

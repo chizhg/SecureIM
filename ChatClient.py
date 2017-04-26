@@ -8,6 +8,7 @@ import Utils
 import Message
 import time
 import ast
+import getpass
 from Message import SEPARATOR, MessageType, AuthStartMsg, MAX_MSG_SIZE, SEPARATOR1, ConnStartMsg, ConnBackMsg, \
     ConnEndMsg, TextMsg, DisconnMsg
 
@@ -63,7 +64,7 @@ class ChatClient(cmd.Cmd):
             login_times += 1
             if logined:
                 self.user_name = user_name
-                chat_client.prompt = CMD_PROMPT
+                chat_client.prompt = self.user_name + CMD_PROMPT
                 chat_client.cmdloop('user <' + user_name + '> successfully login')
             else:
                 print 'Failed to login, please retry'
@@ -74,7 +75,7 @@ class ChatClient(cmd.Cmd):
 
     def _auth_to_server(self):
         user_name = raw_input('Please input your user name: ')
-        password = raw_input('Please input your password: ')
+        password = getpass.getpass('Please input your password: ')
         login_result = False
         self.user_name = user_name
         try:
@@ -331,14 +332,15 @@ class ChatClient(cmd.Cmd):
         user_name = text_msg.user_name
         if user_name in self.online_list and self.online_list[user_name].connected:
             user_info = self.online_list[user_name]
-            ip, port = user_info.address
+            # ip, port = user_info.address
             iv = Crypto.asymmetric_decrypt(self.rsa_pri_key, text_msg.iv)
             encrypted_msg = text_msg.encrypted_msg
             decrypted_msg = Crypto.symmetric_decrypt(user_info.sec_key, iv, encrypted_msg)
             msg_signature = text_msg.msg_signature
             if Crypto.verify_signature(user_info.pub_key, decrypted_msg, msg_signature):
-                print '\n' + MSG_PROMPT + '<From ' + ip + ':' + str(port) + ':' + user_name + ">: " + decrypted_msg
-                print CMD_PROMPT,
+                # print '\n' + MSG_PROMPT + '<From ' + ip + ':' + str(port) + ':' + user_name + ">: " + decrypted_msg
+                print '\n' + user_name + MSG_PROMPT + decrypted_msg
+                print self.user_name + CMD_PROMPT,
 
     def _handle_disconn_msg(self, disconn_msg):
         user_name = disconn_msg.user_name
