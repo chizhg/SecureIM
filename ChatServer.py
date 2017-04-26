@@ -69,7 +69,7 @@ class ChatServer:
     def _listen_to_exit(self):
         while True:
             cmd = raw_input()
-            if cmd == 'exit':
+            if cmd.strip() == 'exit':
                 print 'shut down the server'
                 self.sock.close()
                 os._exit(0)

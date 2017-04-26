@@ -65,7 +65,7 @@ class ChatClient(cmd.Cmd):
             if logined:
                 self.user_name = user_name
                 chat_client.prompt = self.user_name + CMD_PROMPT
-                chat_client.cmdloop('user <' + user_name + '> successfully login')
+                chat_client.cmdloop('###### User <' + user_name + '> successfully login')
         if not logined:
             print 'Your retry times has exceeded the maximum allowed times, exit the program!'
             self.recv_sock.close()
@@ -165,7 +165,7 @@ class ChatClient(cmd.Cmd):
                     # set the client information in self.online_list
                     parsed_list_response = list_response.split(SEPARATOR1)
                     for user in parsed_list_response:
-                        if user not in self.online_list and user != self.user_name:
+                        if user != self.user_name:
                             self.online_list[user] = UserInfo()
         except (socket.error, ValueError) as e:
             self._re_login()
@@ -193,7 +193,7 @@ class ChatClient(cmd.Cmd):
                     time.sleep(2)
                 # if we have already connected to this user, send message to the user
                 if receiver_info.connected:
-                    print '######## Sent message to the user <' + receiver_name + '>'
+                    print '###### Sent message to the user <' + receiver_name + '>'
                     self._send_text_msg(msg, receiver_info)
                 # otherwise we cannot send message to the user
                 else:
@@ -249,7 +249,7 @@ class ChatClient(cmd.Cmd):
     # --------------------------- start a server socket to receive messages from other users ------------------------- #
     def _start_recv_sock(self):
         try:
-            print 'Start recv socket on ' + self.client_ip + ':' + str(self.client_port)
+            print '###### Start recv socket on ' + self.client_ip + ':' + str(self.client_port)
             self.recv_sock.bind((self.client_ip, self.client_port))
             threading.Thread(target=self._listen_msg).start()
         except socket.error:
@@ -266,6 +266,7 @@ class ChatClient(cmd.Cmd):
             msg_obj = Utils.deserialize_obj(decrypted_data)
             # if the message's timestamp is invalid
             if not Utils.validate_timestamp(msg_obj.timestamp):
+                print 'Timestamp of the message from another user is invalid, drop the message!'
                 continue
             if tpe == MessageType.CONN_USER_START:
                 self._handle_conn_start(msg_obj)
@@ -335,7 +336,6 @@ class ChatClient(cmd.Cmd):
         user_name = text_msg.user_name
         if user_name in self.online_list and self.online_list[user_name].connected:
             user_info = self.online_list[user_name]
-            # ip, port = user_info.address
             iv = Crypto.asymmetric_decrypt(self.rsa_pri_key, text_msg.iv)
             encrypted_msg = text_msg.encrypted_msg
             decrypted_msg = Crypto.symmetric_decrypt(user_info.sec_key, iv, encrypted_msg)
@@ -354,7 +354,7 @@ class ChatClient(cmd.Cmd):
     def do_logout(self, arg):
         try:
             if self._logout_from_server():
-                print 'User <' + self.user_name + '> successfully logout.'
+                print '###### User <' + self.user_name + '> successfully logout.'
                 self._disconnect_all_users()
                 self.client_sock.close()
                 self.recv_sock.close()
@@ -371,6 +371,7 @@ class ChatClient(cmd.Cmd):
     def _disconnect_all_users(self):
         for user_name, user_info in self.online_list.iteritems():
             if user_info.connected:
+                print '###### Disconnect to the user <' + user_name + '>'
                 disconn_msg = DisconnMsg(self.user_name, time.time())
                 self._send_encrypted_msg_to_user(user_info, MessageType.DIS_CONN, disconn_msg)
 
