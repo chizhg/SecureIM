@@ -22,6 +22,8 @@ class UserInfo:
         self.address = None
         self.sec_key = None
         self.pub_key = None
+        self.ticket = None
+        self.ticket_signature = None
         self.info_known = False
         self.c3_nonce = None
         self.c4_nonce = None
@@ -87,8 +89,7 @@ class ChatClient(cmd.Cmd):
             auth_result, self.shared_dh_key, c2_nonce = self._handle_auth_start_response(c1_nonce, auth_start_response)
             # Step 3: send authentication confirmation message back to the server,
             # which is c2_nonce encrypted with dh_shared key
-            if auth_result:
-                self._auth_end(c2_nonce)
+            if auth_result and self._auth_end(c2_nonce):
                 login_result = True
         except socket.error:
             print 'Cannot connect to the server in the authentication process, exit the program!'
@@ -152,21 +153,24 @@ class ChatClient(cmd.Cmd):
                                      Crypto.asymmetric_encrypt(self.server_pub_key, iv) +
                                      SEPARATOR + encrypted_c2_nonce)
         self.client_sock.sendall(auth_end_msg)
+        validate_result, decrypted_nonce_response = self._recv_sym_encrypted_msg_from_server(False)
+        if validate_result and long(decrypted_nonce_response) == long(c2_nonce) + 1:
+            return True
+        else:
+            return False
 
     # --------------------------- list online users ------------------------- #
     def do_list(self, arg):
         try:
             self._send_sym_encrypted_msg_to_server(MessageType.LIST_USERS, 'list')
-            validate_result, decrypted_list_response = self._recv_sym_encrypted_msg_from_server()
+            validate_result, list_response = self._recv_sym_encrypted_msg_from_server()
             if validate_result:
-                list_response, r_time = decrypted_list_response.split(SEPARATOR)
-                if Utils.validate_timestamp(r_time):
-                    print MSG_PROMPT + 'Online users: ' + ','.join(list_response.split(SEPARATOR1))
-                    # set the client information in self.online_list
-                    parsed_list_response = list_response.split(SEPARATOR1)
-                    for user in parsed_list_response:
-                        if user != self.user_name:
-                            self.online_list[user] = UserInfo()
+                print MSG_PROMPT + 'Online users: ' + ', '.join(list_response.user_names.split(SEPARATOR1))
+                # set the client information in self.online_list
+                parsed_list_response = list_response.user_names.split(SEPARATOR1)
+                for user in parsed_list_response:
+                    if user != self.user_name and user not in self.online_list:
+                        self.online_list[user] = UserInfo()
         except (socket.error, ValueError) as e:
             self._re_login()
         except:
@@ -189,8 +193,8 @@ class ChatClient(cmd.Cmd):
                 # if we haven't connected to this user
                 if receiver_info.info_known and not receiver_info.connected:
                     self._connect_to_user(receiver_info)
-                    # wait 2 seconds before successfully connected
-                    time.sleep(2)
+                    # wait 1 seconds before successfully connected
+                    time.sleep(1)
                 # if we have already connected to this user, send message to the user
                 if receiver_info.connected:
                     print '###### Sent message to the user <' + receiver_name + '>'
@@ -206,17 +210,16 @@ class ChatClient(cmd.Cmd):
     # --------------------------- get user information from the server ------------------------- #
     def _get_user_info(self, user_name):
         self._send_sym_encrypted_msg_to_server(MessageType.GET_USER_INFO, user_name)
-        validate_result, decrypted_user_info_response = self._recv_sym_encrypted_msg_from_server()
+        validate_result, user_info_obj = self._recv_sym_encrypted_msg_from_server()
         if validate_result:
-            target_address, key_to_client, receiver_pub_key, s_time = decrypted_user_info_response.split(SEPARATOR)
-            # print target_address, key_to_client, receiver_pub_key, send_time
-            if Utils.validate_timestamp(s_time):
-                # print target_address
-                user_info = self.online_list[user_name]
-                user_info.address = ast.literal_eval(target_address)
-                user_info.sec_key = key_to_client
-                user_info.pub_key = Crypto.deserialize_pub_key(receiver_pub_key)
-                user_info.info_known = True
+            # print target_address
+            user_info = self.online_list[user_name]
+            user_info.address = (user_info_obj.ip, user_info_obj.port)
+            user_info.sec_key = user_info_obj.sec_key
+            user_info.pub_key = Crypto.deserialize_pub_key(user_info_obj.pub_key)
+            user_info.ticket = user_info_obj.ticket
+            user_info.ticket_signature = user_info_obj.ticket_signature
+            user_info.info_known = True
 
     # --------------------------- build connection with the user ------------------------- #
     def _connect_to_user(self, target_user_info):
@@ -227,7 +230,8 @@ class ChatClient(cmd.Cmd):
             self.client_ip,
             self.client_port,
             Crypto.serialize_pub_key(self.rsa_pub_key),
-            target_user_info.sec_key,
+            target_user_info.ticket,
+            target_user_info.ticket_signature,
             target_user_info.c3_nonce,
             time.time()
         )
@@ -280,10 +284,17 @@ class ChatClient(cmd.Cmd):
                 self._handle_text_msg(msg_obj)
 
     def _handle_conn_start(self, conn_start_msg):
+        ticket = conn_start_msg.ticket
+        ticket_signature = conn_start_msg.ticket_signature
+        if not Crypto.verify_signature(self.server_pub_key, ticket, ticket_signature):
+            return
+        src_user_name, sec_session_key, timestamp_to_expire = ticket.split(SEPARATOR1)
+        if src_user_name != conn_start_msg.user_name or float(timestamp_to_expire) < time.time():
+            return
         src_user_info = UserInfo()
         src_user_info.address = (conn_start_msg.ip, conn_start_msg.port)
         src_user_info.pub_key = Crypto.deserialize_pub_key(conn_start_msg.pub_key)
-        src_user_info.sec_key = conn_start_msg.sec_key
+        src_user_info.sec_key = sec_session_key
         src_user_info.info_known = True
         self.online_list[conn_start_msg.user_name] = src_user_info
         # send connection back message to the initiator
@@ -307,30 +318,21 @@ class ChatClient(cmd.Cmd):
         if str(decrypted_c3_nonce) == str(user_info.c3_nonce):
             # print 'Successfully connected to the user <' + conn_back_msg.user_name + '>'
             user_info.connected = True
+            iv = Utils.generate_iv()
             conn_end_msg = ConnEndMsg(
                 self.user_name,
-                conn_back_msg.c4_nonce,
+                iv,
+                Crypto.symmetric_encrypt(user_info.sec_key, iv, str(conn_back_msg.c4_nonce)),
                 time.time()
             )
             self._send_encrypted_msg_to_user(user_info, MessageType.CONN_USER_END, conn_end_msg)
 
     def _handle_conn_end(self, conn_end_msg):
         user_info = self.online_list[conn_end_msg.user_name]
-        if user_info.c4_nonce == conn_end_msg.c4_nonce:
-            self._validate_user_info(conn_end_msg.user_name, user_info.address)
-
-    # --------------------------- validate user information from the server ------------------------- #
-    def _validate_user_info(self, user_name, user_address):
-        ip, port = user_address
-        val_user_info_msg = user_name + SEPARATOR + ip + SEPARATOR + str(port)
-        self._send_sym_encrypted_msg_to_server(MessageType.VALIDATE_USER_INFO, val_user_info_msg)
-        validate_result, decrypted_user_val_response = self._recv_sym_encrypted_msg_from_server()
-        if validate_result:
-            list_response, r_time = decrypted_user_val_response.split(SEPARATOR)
-            if Utils.validate_timestamp(r_time):
-                # print 'Successfully connected to user <' + user_name + '>'
-                # set the client information in self.online_list
-                self.online_list[user_name].connected = True
+        decrypted_c4_nonce = Crypto.symmetric_decrypt(user_info.sec_key, conn_end_msg.iv,
+                                                      conn_end_msg.encrypted_c4_nonce)
+        if str(user_info.c4_nonce) == str(decrypted_c4_nonce):
+            user_info.connected = True
 
     def _handle_text_msg(self, text_msg):
         user_name = text_msg.user_name
@@ -396,11 +398,10 @@ class ChatClient(cmd.Cmd):
                                   SEPARATOR + encrypted_msg)
         self.client_sock.sendall(final_msg)
 
-    def _recv_sym_encrypted_msg_from_server(self):
+    def _recv_sym_encrypted_msg_from_server(self, validate_timestamp=True):
         encrypted_server_response = self.client_sock.recv(MAX_MSG_SIZE)
         tpe, data = Message.loads(encrypted_server_response)
         if tpe == MessageType.RES_FOR_INVALID_REQ:
-            # print 'Error message received from the server: ', data
             print data
             return False, data
         else:
@@ -408,6 +409,10 @@ class ChatClient(cmd.Cmd):
             decrypted_response = Crypto.symmetric_decrypt(self.shared_dh_key,
                                                           Crypto.asymmetric_decrypt(self.rsa_pri_key, iv),
                                                           encrypted_response_without_iv)
+            if validate_timestamp:
+                decrypted_response = Utils.deserialize_obj(decrypted_response)
+                if not Utils.validate_timestamp(decrypted_response.timestamp):
+                    return False, None
             return True, decrypted_response
 
     def _send_encrypted_msg_to_user(self, target_user_info, message_type, msg_obj):
@@ -424,8 +429,9 @@ class ChatClient(cmd.Cmd):
         print '|| logout: logout from the server and disconnect all other users    ||'
         print '======================================================================'
 
+
 if __name__ == '__main__':
-    config = Utils.load_config('client.cfg')
+    config = Utils.load_config('conf/client.cfg')
     server_ip = config.get('server_info', 'ip')
     server_port = config.getint('server_info', 'port')
     server_pub_key = config.get('server_info', 'pub_key')

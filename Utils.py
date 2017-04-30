@@ -69,7 +69,7 @@ def generate_nonce(size=128):
 
 def generate_challenge():
     challenge = generate_nonce()
-    trunc_challenge = challenge & 0x00003fffffffffffffffffffffffffff
+    trunc_challenge = challenge & 0x0000ffffffffffffffffffffffffffff
     challenge_hash = Crypto.generate_hash(str(challenge))
     return challenge, challenge_hash, trunc_challenge
 
@@ -79,7 +79,7 @@ def solve_challenge(trunc_challenge, challenge_hash):
     guessed_challenge = trunc_challenge
     n = 0
     while len(str(guessed_challenge)) <= 40:
-        guessed_challenge = str(trunc_challenge + (n << 110))
+        guessed_challenge = str(trunc_challenge + (n << 112))
         if Crypto.generate_hash(guessed_challenge) == challenge_hash:
             return guessed_challenge
         n += 1

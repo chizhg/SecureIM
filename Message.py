@@ -2,9 +2,9 @@ import json
 
 SEPARATOR = '\n'
 SEPARATOR1 = ' '
-MAX_MSG_SIZE = 4096
+MAX_MSG_SIZE = 65536
 
-MAX_TIMESTAMP_GAP = 100
+MAX_TIMESTAMP_GAP = 10
 
 
 class MessageType(object):
@@ -19,8 +19,6 @@ class MessageType(object):
     CONN_USER_RES = 'CONN_USER_RES'
     CONN_USER_END = 'CONN_USER_END'
     DIS_CONN = 'DIS_CONN'
-
-    VALIDATE_USER_INFO = 'VALIDATE_USER_INFO'
 
     TEXT_MSG = 'PLAIN_MSG'
     LOGOUT = 'LOGOUT'
@@ -71,20 +69,48 @@ class AuthStartRes(object):
         self.c2_nonce = c2_nonce
 
 
+class UserListRes(object):
+    def __init__(self,
+                 user_names,
+                 timestamp=None):
+        self.user_names = user_names
+        self.timestamp = timestamp
+
+
+class UserInfoRes(object):
+    def __init__(self,
+                 ip,
+                 port,
+                 sec_key,
+                 ticket,
+                 ticket_signature,
+                 pub_key,
+                 timestamp=None):
+        self.ip = ip
+        self.port = port
+        self.sec_key = sec_key
+        self.ticket = ticket
+        self.ticket_signature = ticket_signature
+        self.pub_key = pub_key
+        self.timestamp = timestamp
+
+
 class ConnStartMsg(object):
     def __init__(self,
                  user_name,
                  ip,
                  port,
                  pub_key,
-                 sec_key,
+                 ticket,
+                 ticket_signature,
                  c3_nonce,
                  timestamp):
         self.user_name = user_name
         self.ip = ip
         self.port = port
         self.pub_key = pub_key
-        self.sec_key = sec_key
+        self.ticket = ticket
+        self.ticket_signature = ticket_signature
         self.c3_nonce = c3_nonce
         self.timestamp = timestamp
 
@@ -106,10 +132,12 @@ class ConnBackMsg(object):
 class ConnEndMsg(object):
     def __init__(self,
                  user_name,
-                 c4_nonce,
+                 iv,
+                 encrypted_c4_nonce,
                  timestamp):
         self.user_name = user_name
-        self.c4_nonce = c4_nonce
+        self.iv = iv
+        self.encrypted_c4_nonce = encrypted_c4_nonce
         self.timestamp = timestamp
 
 
@@ -132,4 +160,12 @@ class DisconnMsg(object):
                  user_name,
                  timestamp):
         self.user_name = user_name
+        self.timestamp = timestamp
+
+
+class LogoutRes(object):
+    def __init__(self,
+                 result,
+                 timestamp=None):
+        self.result = result
         self.timestamp = timestamp

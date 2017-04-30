@@ -6,12 +6,11 @@ import os
 import Message
 import Utils
 import time
+import traceback
 
-from Message import MessageType, AuthStartRes, SEPARATOR, SEPARATOR1, MAX_MSG_SIZE
+from Message import MessageType, AuthStartRes, UserListRes, UserInfoRes, LogoutRes, SEPARATOR, SEPARATOR1, MAX_MSG_SIZE
 
-USERS_INFO_FILE = 'users.csv'
-DELIMITER = ','
-QUOTECHAR = '|'
+
 # MSS = 1460
 
 
@@ -34,20 +33,20 @@ class UserInfo:
 
 
 class ChatServer:
-    def __init__(self, host, port, private_key_file):
+    def __init__(self, host, port, private_key_file, users_info_file):
         self.host = host
         self.port = port
         self.pri_key = Crypto.load_private_key(private_key_file)
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.all_users = self._load_users_info()
+        self.all_users = self._load_users_info(users_info_file)
         self.login_users = dict()
 
     @staticmethod
-    def _load_users_info():
+    def _load_users_info(users_info_file, delimiter=',', quotechar='|'):
         users_info = dict()
-        with open(USERS_INFO_FILE, 'rb') as csv_file:
-            rows = csv.reader(csv_file, delimiter=DELIMITER, quotechar=QUOTECHAR)
+        with open(users_info_file, 'rb') as csv_file:
+            rows = csv.reader(csv_file, delimiter=delimiter, quotechar=quotechar)
             for row in rows:
                 username = row[0]
                 salt_and_hash = (row[1], row[2])
@@ -64,6 +63,7 @@ class ChatServer:
                 connection, client_address = self.sock.accept()
                 threading.Thread(target=self._handle_client, args=(connection, client_address)).start()
         except socket.error:
+            traceback.print_exc()
             print 'Failed to start the chat server'
 
     def _listen_to_exit(self):
@@ -107,12 +107,15 @@ class ChatServer:
                 elif tpe == MessageType.AUTH_END and client_address in self.login_users \
                         and self.login_users[client_address].state == UserState.VERIFIED:
                     print 'receive authentication end message from ', client_address
-                    auth_result = self._handle_client_auth_end(client_address, data)
+                    auth_result, response_msg = self._handle_client_auth_end(client_address, data)
                     if not auth_result:
+                        connection.sendall(Message.dumps(MessageType.RES_FOR_INVALID_REQ, response_msg))
                         self._client_error(connection, client_address)
                         break
                     self.login_users[client_address].state = UserState.AUTHENTICATED
                     print 'successfully login user: ', self.login_users[client_address].user_name
+                    self._send_sym_encrypted_msg_to_client(connection, self.login_users[client_address], response_msg,
+                                                           False)
                 # ----------------- handle messages sent from authenticated users --------------------#
                 elif client_address in self.login_users and self.login_users[
                     client_address].state == UserState.AUTHENTICATED:
@@ -129,10 +132,6 @@ class ChatServer:
                     elif tpe == MessageType.GET_USER_INFO:
                         print 'receive get user info message from ', client_address
                         self._handle_get_user_info(user_info, connection, decrypted_msg)
-                    # handle validate user message
-                    elif tpe == MessageType.VALIDATE_USER_INFO:
-                        print 'receive validate user info message from ', client_address
-                        self._handle_val_user_info(user_info, connection, decrypted_msg)
                     # handle logout message
                     elif tpe == MessageType.LOGOUT:
                         print 'receive logout message from ', client_address
@@ -204,14 +203,18 @@ class ChatServer:
         received_c2_nonce = Crypto.symmetric_decrypt(user_info.secret_key,
                                                      Crypto.asymmetric_decrypt(self.pri_key, iv),
                                                      encrypted_c2_nonce)
-        return received_c2_nonce == str(user_info.temp_nonce)
+        if received_c2_nonce != str(user_info.temp_nonce):
+            return False, 'The nonce encrypted with the session key is wrong!'
+        auth_end_res_msg = str(long(received_c2_nonce) + 1)
+        return True, auth_end_res_msg
 
     # --------------------------- get all users' names --------------------------- #
     def _handle_client_list(self, request_user_info, connection, received_list_message):
         list_flag, list_send_time = received_list_message.split(SEPARATOR)
         if self._check_timestamp(connection, list_send_time):
             current_user_names = SEPARATOR1.join(user.user_name for client_addr, user in self.login_users.iteritems())
-            self._send_sym_encrypted_msg_to_client(connection, request_user_info, current_user_names)
+            user_list_res = UserListRes(current_user_names)
+            self._send_sym_encrypted_msg_to_client(connection, request_user_info, user_list_res)
 
     # --------------------------- get information of another user ------------------------- #
     def _handle_get_user_info(self, request_user_info, connection, user_info_msg):
@@ -221,11 +224,21 @@ class ChatServer:
         target_user_info = self._find_user_info_by_name(target_user_name)
         if target_user_info is not None:
             key_between_client = Utils.generate_symmetric_key()
+            timestamp_to_expire = time.time() + 1000
+            ticket = request_user_info.user_name + SEPARATOR1 + \
+                     key_between_client + SEPARATOR1 + \
+                     str(timestamp_to_expire)
+            ticket_signature = Crypto.sign(self.pri_key, ticket)
             target_pubkey = target_user_info.rsa_pub_key
-            target_message = str((target_user_info.ip, target_user_info.port)) + SEPARATOR + \
-                             key_between_client + SEPARATOR + \
-                             Crypto.serialize_pub_key(target_pubkey)
-            self._send_sym_encrypted_msg_to_client(connection, request_user_info, target_message)
+            user_info_msg = UserInfoRes(
+                target_user_info.ip,
+                target_user_info.port,
+                key_between_client,
+                ticket,
+                ticket_signature,
+                Crypto.serialize_pub_key(target_pubkey)
+            )
+            self._send_sym_encrypted_msg_to_client(connection, request_user_info, user_info_msg)
         else:
             connection.sendall(
                 Message.dumps(MessageType.RES_FOR_INVALID_REQ, 'The user <' + target_user_name + '> is offline!'))
@@ -237,18 +250,6 @@ class ChatServer:
                 return login_user_info
         return None
 
-    # --------------------------- user validation request ------------------------- #
-    def _handle_val_user_info(self, request_user_info, connection, val_user_msg):
-        user_name, ip, port, timestamp = val_user_msg.split(SEPARATOR)
-        if not self._check_timestamp(connection, timestamp):
-            return
-        user_info_to_val = self._find_user_info_by_name(user_name)
-        if user_info_to_val is not None and user_info_to_val.ip == ip and str(user_info_to_val.port) == port:
-            self._send_sym_encrypted_msg_to_client(connection, request_user_info, 'OK')
-        else:
-            connection.sendall(
-                Message.dumps(MessageType.RES_FOR_INVALID_REQ, 'Invalid user information!'))
-
     # --------------------------- logout the user ------------------------- #
     def _handle_logout(self, request_user_info, client_address, connection, logout_msg):
         n, timestamp = logout_msg.split(SEPARATOR)
@@ -256,24 +257,28 @@ class ChatServer:
             return
         if client_address in self.login_users:
             del self.login_users[client_address]
-            self._send_sym_encrypted_msg_to_client(connection, request_user_info, 'OK')
+            logout_res = LogoutRes('OK')
+            self._send_sym_encrypted_msg_to_client(connection, request_user_info, logout_res)
         else:
             connection.sendall(
                 Message.dumps(MessageType.RES_FOR_INVALID_REQ, 'Trying to logout an offline user!'))
 
     # ------------ Common function using symmetric encryption to send back message to client -------------- #
     @staticmethod
-    def _send_sym_encrypted_msg_to_client(connection, request_user_info, msg):
+    def _send_sym_encrypted_msg_to_client(connection, request_user_info, msg, include_timestamp=True):
         iv = Utils.generate_iv()
-        res_message = msg + SEPARATOR + str(time.time())
-        encrypted_res_message = Crypto.symmetric_encrypt(request_user_info.secret_key, iv, res_message)
+        if include_timestamp:
+            msg.timestamp = time.time()
+            msg = Utils.serialize_obj(msg)
+        encrypted_res_message = Crypto.symmetric_encrypt(request_user_info.secret_key, iv, msg)
         send_res_msg = Message.dumps(MessageType.RES_FOR_VALID_REQ,
                                      Crypto.asymmetric_encrypt(request_user_info.rsa_pub_key, iv) +
                                      SEPARATOR + encrypted_res_message)
         connection.sendall(send_res_msg)
 
     def _client_error(self, connection, client_address):
-        del self.login_users[client_address]
+        if client_address in self.login_users:
+            del self.login_users[client_address]
         connection.close()
 
     @staticmethod
@@ -287,11 +292,12 @@ class ChatServer:
 
 if __name__ == '__main__':
     # parse the innput parameters
-    config = Utils.load_config('server.cfg')
+    config = Utils.load_config('conf/server.cfg')
     port_num = config.getint('info', 'port')
     pri_key = config.get('info', 'pri_key')
+    user_pwds = config.get('info', 'user_pwds')
     host_name = Utils.get_local_ip()
     # create the chat server
-    chat_server = ChatServer(host_name, port_num, pri_key)
+    chat_server = ChatServer(host_name, port_num, pri_key, user_pwds)
     # start running the chat server
     chat_server.run()
